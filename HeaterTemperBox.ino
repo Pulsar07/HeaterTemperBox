@@ -65,10 +65,10 @@ Version History
 #define DEF_MAX_SENSOR_TEMP 57.0f
 #define DEF_ILLEGAL_TEMP    65.0f
 #define DEF_MAX_SETUP_TEMP  55.0f
- 
+
 const char* APPLICATION = "TemperAtureRegulator";
 const char* DESCRIPTION = "regulates temperature and airflow for tempering of shell and mold parts";
-const char* CMDDESCRIPTION = "target_temp [30-60]C, heat_duration [1-95]h, temperature_gradient [1-10], log_level [1=debug|2=info|3=WARN|4=err]";
+const char* CMDDESCRIPTION = "switch [on,off], target_temp [30-60]C, heat_duration [1-95]h, temperature_gradient [1-10], log_level [1=debug|2=info|3=WARN|4=err]";
 const char* BUILD_DATE = "build at: "  __DATE__ " " __TIME__;
 const char* SSID = DEF_SSID;
 const char* PSK = DEF_PSK;
