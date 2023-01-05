@@ -181,7 +181,7 @@ void TemperatureController::stop() {
 
 
 void TemperatureController::setTemperatureGradient(uint8_t aGradient) {
-    if (aGradient > 0 && aGradient < 10 ) {  
+    if (aGradient > 0 && aGradient <= 10 ) {  
       myTemperatureGradient = aGradient;
       this->calculateDurations();
       logMsg(DEBUG, String("set temperature gradient : ")+ aGradient); 
@@ -191,9 +191,15 @@ void TemperatureController::setTemperatureGradient(uint8_t aGradient) {
     }
 }
 
+/*
+  set temper durations in minutes
+*/
 void TemperatureController::setTemperDuration(int aDuration) {
   if (aDuration > 0 && aDuration < 96*60) {
     myTemperDuration = aDuration;
+    this->calculateDurations();
+  } else if (aDuration == 0) {
+    myTemperDuration = 1;
     this->calculateDurations();
   } else {
     logMsg(ERROR, String("invalid temper duration: ") + aDuration);
@@ -247,20 +253,22 @@ void TemperatureController::calculateDurations() {
   // depending on the temper and current temperature and the gradient, 
   // the duration for heatup and cooldown is calculated
   float currentTemp = getTempNear();
+  int currentTemperTimer = getTemperTimer();
   if (myTargetTemperAture > 0) { 
     myHeatupDuration = max(0.0f, 60.0f * (float) (myTargetTemperAture - currentTemp) / myTemperatureGradient); 
     myCooldownDuration = max(0.0f, 60.0f * (float) (myTargetTemperAture - ourBaseTemp) / myTemperatureGradient); 
   }
 
   if (myTemperDuration > 0) { 
-    myTimer = myHeatupDuration + myTemperDuration + myCooldownDuration;
+    if (!myIsStarted ) {
+      // if values are changed while a temper process is started, take 
+      currentTemperTimer = myTemperDuration;
+    } 
+    myTimer = myHeatupDuration + currentTemperTimer + myCooldownDuration;
   }
 
   if (myTargetTemperAture > 0 && myTimer > 0 ) {
-    // myIsStarted = true;
     myStartTemp = min(DEF_MAX_SETUP_TEMP, currentTemp);
-  } else { 
-    // myIsStarted = false;
   }
   logMsg(INFO, String("setting S:T:D:G:") + String(myIsStarted) + ":" + String(myTargetTemperAture, 2) + ":" + String(myTemperDuration) + ":" + String(myTemperatureGradient));
 }
