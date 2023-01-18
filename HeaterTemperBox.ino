@@ -14,6 +14,7 @@
 const char* VERSION = "V0.7";
 /*
 Version History
+ V0.8  05.01.2023: RS : supports now changes of settings while started process
  V0.7  28.07.2022: RS : more enhanced switch off/on
  V0.6  26.05.2022: RS : faster switch off temperature at cool down
  V0.5  11.04.2022: RS : new less input values only: target temperature, target temp duration, temperature gradient
@@ -823,7 +824,7 @@ void setPWMController(int aPowerFactor) {
   if (aPowerFactor < 0  | aPowerFactor > 100) {
     ourPwmHeatingPowerValue = 0;
   } else {
-    ourPwmHeatingPowerValue = map(aPowerFactor, 0,100,0,255);
+    ourPwmHeatingPowerValue = map(aPowerFactor, 0,100,0,250);
   }
   analogWrite(PWM_PIN, ourPwmHeatingPowerValue);
 }
