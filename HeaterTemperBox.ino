@@ -11,9 +11,10 @@
 // private settings
 #include "settings.h"
 
-const char* VERSION = "V0.10";
+const char* VERSION = "V0.11";
 /*
 Version History
+ V0.11  12.02.2023: RS : added <switch lock> command and ignoring recurring commands 
  V0.10  22.01.2023: RS : added <switch reset> command, to overcome a pending non-VALID state
  V0.9  18.01.2023: RS : PWN value of the thyristor module is now limited to 250, at value 255 the module switched power off ;-(
  V0.8  05.01.2023: RS : supports now changes of settings while started process
@@ -71,7 +72,7 @@ Version History
 
 const char* APPLICATION = "TemperAtureRegulator";
 const char* DESCRIPTION = "regulates temperature and airflow for tempering of shell and mold parts";
-const char* CMDDESCRIPTION = "switch [on,off,reset], target_temp [30-60]C, heat_duration [1-95]h, temperature_gradient [1-10], log_level [1=debug|2=info|3=WARN|4=err]";
+const char* CMDDESCRIPTION = "switch [on,off,reset,lock,unlock], target_temp [30-60]C, heat_duration [1-95]h, temperature_gradient [1-10], log_level [1=DEBUG|2=INFO|3=WARN|4=ERROR]";
 const char* BUILD_DATE = "build at: "  __DATE__ " " __TIME__;
 const char* SSID = DEF_SSID;
 const char* PSK = DEF_PSK;
@@ -125,7 +126,6 @@ class TemperatureController {
   public:
     // int myThrottle;
     // boolean myTgetTempReached;
-    boolean myIsStarted;
     // unsigned long myLastTime;
     // float myLastTemp;
     void init();
@@ -143,7 +143,11 @@ class TemperatureController {
     uint8_t getTemperatureGradient();
     void start();
     void stop();
+    void lock();
+    void unlock();
     boolean isActive();
+    boolean isStarted();
+    boolean isLocked();
   private:
     static const uint8_t  ourBaseTemp = 20;
     uint8_t myTemperatureGradient;
@@ -155,6 +159,8 @@ class TemperatureController {
     uint8_t myTargetTemperAture;
     uint8_t myTargetTemperature;
     void calculateDurations();
+    boolean myIsStarted;
+    boolean myLockState;
 };
 
 
@@ -166,38 +172,109 @@ void TemperatureController::init() {
   myTimer = 0;
   myTemperatureGradient = 4;
   myIsStarted = false;
+  myLockState = true;
+}
+
+boolean TemperatureController::isLocked() {
+  return myLockState;
+}
+
+boolean TemperatureController::isStarted() {
+  return myIsStarted;
+}
+
+void TemperatureController::lock() {
+  if (myLockState) {
+    // do nothing, but a log
+    logMsg(WARNING, String("switch lock state is already set"));
+    return;
+  }
+  myLockState = true;
+  ourStateChanged = true;
+  logMsg(INFO, String("lock controller")); 
+}
+
+void TemperatureController::unlock() {
+  if (!myLockState) {
+    // do nothing, but a log
+    logMsg(WARNING, String("switch unlock state is already set"));
+    return;
+  }
+  myLockState = false;
+  ourStateChanged = true;
+  logMsg(INFO, String("unlock controller")); 
 }
 
 void TemperatureController::start() {
+  if (myLockState) {
+    // do nothing, but a log
+    logMsg(WARNING, String("system is locked, unlock first"));
+    return;
+  }
+  if (myIsStarted) {
+    // do nothing, but a log
+    logMsg(WARNING, String("switch off state is already set"));
+    return;
+  }
   myIsStarted = true;
   ourStateChanged = true;
   this->calculateDurations();
-  logMsg(DEBUG, String("start temper process ")); 
+  logMsg(INFO, String("start temper process ")); 
 }
 
 void TemperatureController::stop() {
+  if (myLockState) {
+    // do nothing, but a log
+    logMsg(WARNING, String("system is locked, unlock first"));
+    return;
+  }
+  if (!myIsStarted) {
+    // do nothing, but a log
+    logMsg(WARNING, String("switch on state is already set"));
+    return;
+  }
   setHeatDevices(HEATER_OFF, 0);
   myIsStarted = false;
   ourStateChanged = true;
-  logMsg(DEBUG, String("stop temper process ")); 
+  logMsg(INFO, String("stop temper process ")); 
 }
 
 
 void TemperatureController::setTemperatureGradient(uint8_t aGradient) {
-    if (aGradient > 0 && aGradient <= 10 ) {  
-      myTemperatureGradient = aGradient;
-      this->calculateDurations();
-      logMsg(DEBUG, String("set temperature gradient : ")+ aGradient); 
-    } else {
-      logMsg(ERROR, String("invalid temperature gradient : ")+ aGradient); 
-      this->stop();
-    }
+  if (myLockState) {
+    // do nothing, but a log
+    logMsg(WARNING, String("system is locked, unlock first"));
+    return;
+  }
+  if (aGradient == myTemperatureGradient) {
+    // do nothing, but a log
+    logMsg(WARNING, String("temperature_gradient already set: ") + aGradient);
+    return;
+  }
+  if (aGradient > 0 && aGradient <= 10 ) {  
+     myTemperatureGradient = aGradient;
+     this->calculateDurations();
+     logMsg(INFO, String("set temperature gradient : ")+ aGradient); 
+   } else {
+     logMsg(ERROR, String("invalid temperature gradient : ")+ aGradient); 
+     this->stop();
+   }
 }
 
 /*
   set temper durations in minutes
 */
 void TemperatureController::setTemperDuration(int aDuration) {
+  if (myLockState) {
+    // do nothing, but a log
+    logMsg(WARNING, String("system is locked, unlock first"));
+    return;
+  }
+  if (aDuration == myTemperDuration) {
+    // do nothing, but a log
+    logMsg(WARNING, String("heat_duration already set: ") + aDuration);
+    return;
+  }
   if (aDuration > 0 && aDuration < 96*60) {
     myTemperDuration = aDuration;
     this->calculateDurations();
@@ -239,6 +316,16 @@ int TemperatureController::getCooldownTimer() {
 }
 
 void TemperatureController::setTargetTemperature(int aTemperature) {
+  if (myLockState) {
+    // do nothing, but a log
+    logMsg(WARNING, String("system is locked, unlock first"));
+    return;
+  }
+  if (aTemperature == myTargetTemperAture) {
+    // do nothing, but a log
+    logMsg(WARNING, String("target_temp already set: ") + aTemperature);
+    return;
+  }
   if (aTemperature >= 0 && aTemperature <= DEF_MAX_SETUP_TEMP) {
     myTargetTemperAture = aTemperature;
     this->calculateDurations();
@@ -273,7 +360,7 @@ void TemperatureController::calculateDurations() {
   if (myTargetTemperAture > 0 && myTimer > 0 ) {
     myStartTemp = min(DEF_MAX_SETUP_TEMP, currentTemp);
   }
-  logMsg(INFO, String("setting S:T:D:G:") + String(myIsStarted) + ":" + String(myTargetTemperAture, 2) + ":" + String(myTemperDuration) + ":" + String(myTemperatureGradient));
+  logMsg(INFO, String("new settings S:T:D:G:") + String(myIsStarted) + ":" + String(myTargetTemperAture, 2) + ":" + String(myTemperDuration) + ":" + String(myTemperatureGradient));
 }
 
 /*
@@ -306,7 +393,7 @@ uint8_t TemperatureController::getTemperatureGradient() {
 }
 
 boolean TemperatureController::isActive() {
-  if (myTargetTemperAture > 0 && myTimer > 0) {
+  if (myTargetTemperAture > 0 && myTimer > 0 && myIsStarted == true) {
     return true;
   }
   return false;
@@ -530,40 +617,46 @@ mqtt_callback is called for subscribed commands in case of receiving mqtt topics
 */
 void mqtt_callback(char* aTopic, byte* aPayload, unsigned int aLength) {
   // MQTT message arrived [cmnd/AlarmBell_627E5B/bell] 1
-  String payload;
+  String theTopic = String(aTopic);
+  String thePayload;
   for (int i = 0; i < aLength; i++) {
-    payload += (char)aPayload[i];
+    thePayload += (char)aPayload[i];
   }
-  Serial.println("MQTT message arrived [" + String(aTopic) + "] : <" + payload +">");
 
-  // logMsg(INFO, String("mqtt command : " + String(aTopic) + "/" + payload));
+  logMsg(DEBUG, String("mqtt command received: " + theTopic + "/" + thePayload));
   
-  if (String(aTopic).endsWith("/switch")) {
-    if (payload.equals("reset")) {
+  if (theTopic.endsWith("/switch")) {
+    if (thePayload.equals("reset")) {
       ESP.restart(); //ESP.reset();
-    } else if (payload.equals("on")) {
+    } else if (thePayload.equals("lock")) {
+      ourTempCtrler.lock();
+      logMsg(INFO, String("mqtt command received lock: " + theTopic + "/" + thePayload));
+    } else if (thePayload.equals("unlock")) {
+      logMsg(INFO, String("mqtt command received unlock: " + theTopic + "/" + thePayload));
+      ourTempCtrler.unlock();
+    } else if (thePayload.equals("on")) {
       ourTempCtrler.start();
-      Serial.println(String("switch on : " + String(aTopic)));
+      Serial.println(String("switch on : " + theTopic));
     } else {
       ourTempCtrler.stop();
-      Serial.println(String("switch off : " + String(aTopic)));
+      Serial.println(String("switch off : " + theTopic));
     }
   } else
-  if (String(aTopic).endsWith("/target_temp")) {
-    int targetTemp = payload.toInt();
+  if (theTopic.endsWith("/target_temp")) {
+    int targetTemp = thePayload.toInt();
     ourTempCtrler.setTargetTemperature(targetTemp);
   } else
-  if (String(aTopic).endsWith("/heat_duration")) {
-    int duration = payload.toInt(); // duration is given in hours 
+  if (theTopic.endsWith("/heat_duration")) {
+    int duration = thePayload.toInt(); // duration is given in hours 
     duration *= 60; // duration in minutes
     ourTempCtrler.setTemperDuration(duration);
   } else
-  if (String(aTopic).endsWith("/temperature_gradient")) {
-    int gradient = payload.toInt(); // gradient in °C per hour
+  if (theTopic.endsWith("/temperature_gradient")) {
+    int gradient = thePayload.toInt(); // gradient in °C per hour
     ourTempCtrler.setTemperatureGradient(gradient);
   } else
-  if (String(aTopic).endsWith("/log_level")) {
-    int level = payload.toInt();
+  if (theTopic.endsWith("/log_level")) {
+    int level = thePayload.toInt();
     if (level > LS_START && level < LS_END ) {
       ourLogSeverity = (LogSeverity) level;
       Serial.println(String("setting log level to : ") + ourLogSeverity);
@@ -673,7 +766,6 @@ void setup() {
   setup_dts();
   setup_pwm();
 
-  logMsg(INFO, "startup of HeaterTemperBox Controller successfull");
   Serial.println("setup successfully finished");
 }
 
@@ -743,8 +835,8 @@ void mqtt_sendData() {
   // send data via mqtt in a cyclical manner
   // MQTT handling
   if (!ourMqttClient.connected()) {
-    isStaticMQTTInfoSent=false;
     mqtt_reconnect();
+    isStaticMQTTInfoSent=false;
   }
 
   log_printSecond();
@@ -755,6 +847,9 @@ void mqtt_sendData() {
     // send some static info only once with the first call
     isStaticMQTTInfoSent=true;
 
+    if (millis() < 20000) {
+      logMsg(INFO, String("startup of HeaterTemperBox ") + VERSION + " Controller successfull");
+    }
     mqtt_publishData("/stat/%s/application", APPLICATION);
     mqtt_publishData("/stat/%s/description", DESCRIPTION);
     mqtt_publishData("/stat/%s/version", VERSION);
@@ -797,6 +892,8 @@ void mqtt_sendData() {
     + getDurationString(
          ourTempCtrler.getHeatupTimer()+ourTempCtrler.getTemperTimer()+ourTempCtrler.getCooldownTimer())
     + String(ourTempCtrler.getCalculatedTemperature())
+    + String(ourTempCtrler.isStarted())
+    + String(ourTempCtrler.isLocked())
     + String(ourInternalState)
     + String(ourDebugVal)
     ;
@@ -815,6 +912,8 @@ void mqtt_sendData() {
     mqtt_publishData("/tele/%s/duration_heatup", getDurationString(ourTempCtrler.getHeatupTimer()));
     mqtt_publishData("/tele/%s/duration_cooldown", getDurationString(ourTempCtrler.getCooldownTimer()));
     mqtt_publishData("/tele/%s/target", String(ourTempCtrler.getCalculatedTemperature()));
+    mqtt_publishData("/tele/%s/isstarted", String(ourTempCtrler.isStarted()));
+    mqtt_publishData("/tele/%s/islocked", String(ourTempCtrler.isLocked()));
     mqtt_publishData("/tele/%s/internalstate", String(ourInternalState));
     mqtt_publishData("/tele/%s/debug", String(ourDebugVal, 0));
     valuesLast = stringValue;
