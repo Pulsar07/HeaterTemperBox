@@ -11,9 +11,11 @@
 // private settings
 #include "settings.h"
 
-const char* VERSION = "V0.7";
+const char* VERSION = "V0.10";
 /*
 Version History
+ V0.10  22.01.2023: RS : added <switch reset> command, to overcome a pending non-VALID state
+ V0.9  18.01.2023: RS : PWN value of the thyristor module is now limited to 250, at value 255 the module switched power off ;-(
  V0.8  05.01.2023: RS : supports now changes of settings while started process
  V0.7  28.07.2022: RS : more enhanced switch off/on
  V0.6  26.05.2022: RS : faster switch off temperature at cool down
@@ -69,7 +71,7 @@ Version History
 
 const char* APPLICATION = "TemperAtureRegulator";
 const char* DESCRIPTION = "regulates temperature and airflow for tempering of shell and mold parts";
-const char* CMDDESCRIPTION = "switch [on,off], target_temp [30-60]C, heat_duration [1-95]h, temperature_gradient [1-10], log_level [1=debug|2=info|3=WARN|4=err]";
+const char* CMDDESCRIPTION = "switch [on,off,reset], target_temp [30-60]C, heat_duration [1-95]h, temperature_gradient [1-10], log_level [1=debug|2=info|3=WARN|4=err]";
 const char* BUILD_DATE = "build at: "  __DATE__ " " __TIME__;
 const char* SSID = DEF_SSID;
 const char* PSK = DEF_PSK;
@@ -537,7 +539,9 @@ void mqtt_callback(char* aTopic, byte* aPayload, unsigned int aLength) {
   // logMsg(INFO, String("mqtt command : " + String(aTopic) + "/" + payload));
   
   if (String(aTopic).endsWith("/switch")) {
-    if (payload.equals("on")) {
+    if (payload.equals("reset")) {
+      ESP.restart(); //ESP.reset();
+    } else if (payload.equals("on")) {
       ourTempCtrler.start();
       Serial.println(String("switch on : " + String(aTopic)));
     } else {
