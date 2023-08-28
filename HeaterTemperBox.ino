@@ -11,10 +11,11 @@
 // private settings
 #include "settings.h"
 
-const char* VERSION = "V0.11";
+const char* VERSION = "V0.12";
 /*
 Version History
- V0.11  12.02.2023: RS : added <switch lock> command and ignoring recurring commands 
+ V0.12  29.08.2023: RS : enhanced fix for problems at dts sensor read,  minor log fixes 
+ V0.11  12.02.2023: RS : added <switch un/lock> command and ignoring recurring commands, enhanced logMsges
  V0.10  22.01.2023: RS : added <switch reset> command, to overcome a pending non-VALID state
  V0.9  18.01.2023: RS : PWN value of the thyristor module is now limited to 250, at value 255 the module switched power off ;-(
  V0.8  05.01.2023: RS : supports now changes of settings while started process
@@ -45,10 +46,9 @@ Version History
  *
  */
 
-
 /**
-  this is a controller for a temperature regulatated heating system
-  Features:
+ * \mainpage this is a controller for a temperature regulatated heating system, especially for tempering composite material
+  * \section intro Features
   * measuring of temperature using two Dallas DS18B20 temperature sensors
   ** one near temperature (near to the heating plate)
   ** one far temperature (far to the heating plate)
@@ -213,7 +213,7 @@ void TemperatureController::start() {
   }
   if (myIsStarted) {
     // do nothing, but a log
-    logMsg(WARNING, String("switch off state is already set"));
+    logMsg(WARNING, String("switch on state is already set"));
     return;
   }
   myIsStarted = true;
@@ -226,11 +226,6 @@ void TemperatureController::stop() {
   if (myLockState) {
     // do nothing, but a log
     logMsg(WARNING, String("system is locked, unlock first"));
-    return;
-  }
-  if (!myIsStarted) {
-    // do nothing, but a log
-    logMsg(WARNING, String("switch on state is already set"));
     return;
   }
   setHeatDevices(HEATER_OFF, 0);
@@ -448,6 +443,7 @@ struct TemperatureSensor {
   String name;
   float temperature;
   float temperature_last=-100.0f;
+  uint8_t faultnum=0;
 };
 
 TemperatureSensor ourTemperatureSensorNear = { {}, "NearTempSensor", 0.0f};
@@ -623,7 +619,7 @@ void mqtt_callback(char* aTopic, byte* aPayload, unsigned int aLength) {
     thePayload += (char)aPayload[i];
   }
 
-  logMsg(DEBUG, String("mqtt command received: " + theTopic + "/" + thePayload));
+  logMsg(INFO, String("mqtt command received: " + theTopic + "/" + thePayload));
   
   if (theTopic.endsWith("/switch")) {
     if (thePayload.equals("reset")) {
@@ -986,25 +982,33 @@ float getTempNear() {
 }
 
 float getTemp(TemperatureSensor* aSensor) {
-  float newTemp;
-  // read the temperature up to 5 times from the sensor
-  // in some cases there are wrong values given so check validity
-  for (int i=0; i<5; i++) {
-    newTemp = ourDallasTempSensors.getTempC(aSensor->address);
-    if (aSensor->temperature_last == -100.0f) {
-      // first time
-      aSensor->temperature_last = newTemp;
-    }
-    if (newTemp > DEVICE_DISCONNECTED_C && abs(newTemp - aSensor->temperature_last) < 3.0f) {
-      // all is ok, there is no error given from the lib and the new temp is near to the last one
-      break;
-    } else {
-      // if there is a problem getting the temperature do some retries
-      delay(10);
-    }
+  float newTemp = ourDallasTempSensors.getTempC(aSensor->address);
+  if (aSensor->temperature_last == -100.0f) {
+    // first time
+    aSensor->temperature_last = newTemp;
   }
-  if (newTemp <= DEVICE_DISCONNECTED_C || abs(newTemp - aSensor->temperature_last) >= 3.0f) {
-    setState(ERROR_TEMP_SENSOR, String(newTemp));
+
+  if (newTemp == DEVICE_DISCONNECTED_C) { // = -127.0
+    aSensor->faultnum++;
+  } else {
+    aSensor->faultnum = 0;
+  }
+
+  if (aSensor->faultnum > 10) {
+    // in case of continuing  error, set system to safe state
+    logMsg(ERROR, "temperature sensor " + aSensor->name + " with continuing problem: " + aSensor->faultnum);
+    setState(ERROR_TEMP_SENSOR, "sensor error: not connected");
+  } else
+  if (aSensor->faultnum > 0) {
+    // in case of temporary error, return the last value
+    newTemp = aSensor->temperature_last;
+    logMsg(WARNING, "temperature sensor " + aSensor->name + " with temporary problem: " + aSensor->faultnum);
+  }
+
+  if (abs(newTemp - aSensor->temperature_last) >= 3.0f) {
+    // in case of inplausible value hops, set system to safe state
+    logMsg(ERROR, "temperature sensor value vaults");
+    setState(ERROR_TEMP_SENSOR, String(newTemp)+"/"+String(aSensor->temperature_last));
   }
   aSensor->temperature_last = newTemp;
   return newTemp;
@@ -1024,6 +1028,7 @@ void  controlTemperature() {
 
   // safety instruction, do nothing if the internal state is not valid
   if (ourInternalState != VALID) {
+    logMsg(ERROR, String("invalid internal state: ") + String(ourInternalState));
     setHeatDevices(SAFETY_SHUTDOWN, 0, INVALID_STATE);
     ourTempCtrler.stop();
     return;
@@ -1032,8 +1037,8 @@ void  controlTemperature() {
   if (abs(ourTempNear - ourTempFar) > DEF_MAX_TEMP_DIFF) {
     // switch down the heater power controller
     setHeatDevices(SAFETY_SHUTDOWN, 0, ERROR_TEMP_SENSORS_INCONSISTENT);
-    ourTempCtrler.stop();
     logMsg(ERROR, "inconsistent temperature sensor drift");
+    ourTempCtrler.stop();
     return;
   }
   if (ourTempNear > DEF_ILLEGAL_TEMP
