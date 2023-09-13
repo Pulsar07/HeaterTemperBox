@@ -14,7 +14,7 @@
 const char* VERSION = "V0.13";
 /*
 Version History
- V0.13  12.09.2023: RS : mqtt LWT enhancements and non blocking mqtt reconnects, more enhanced dts sensor error handling, fixed lock'ing handling
+ V0.13  12.09.2023: RS : mqtt LWT enhancements and non blocking mqtt reconnects, more enhanced dts sensor error handling, fixed lock'ing handling, more init power 
  V0.12  29.08.2023: RS : enhanced fix for problems at dts sensor read,  minor log fixes 
  V0.11  12.02.2023: RS : added <switch un/lock> command and ignoring recurring commands, enhanced logMsges
  V0.10  22.01.2023: RS : added <switch reset> command, to overcome a pending non-VALID state
@@ -1007,7 +1007,7 @@ float getTemp(TemperatureSensor* aSensor) {
 
   if (abs(newTemp - aSensor->temperature_last) >= 3.0f) {
     // in case of inplausible value hops, set system to safe state
-    logMsg(ERROR, "temperature sensor value fault");
+    logMsg(ERROR, "temperature sensor " +aSensor->name +" value fault  : " + newTemp);
   }
 
   if (aSensor->faultnum > 10) {
