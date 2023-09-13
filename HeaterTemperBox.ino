@@ -11,9 +11,10 @@
 // private settings
 #include "settings.h"
 
-const char* VERSION = "V0.13";
+const char* VERSION = "V0.14";
 /*
 Version History
+ V0.14  13.09.2023: RS : optionally the temper process can be startet automatically by #define AUTOSTART
  V0.13  12.09.2023: RS : mqtt LWT enhancements and non blocking mqtt reconnects, more enhanced dts sensor error handling, fixed lock'ing handling, more init power 
  V0.12  29.08.2023: RS : enhanced fix for problems at dts sensor read,  minor log fixes 
  V0.11  12.02.2023: RS : added <switch un/lock> command and ignoring recurring commands, enhanced logMsges
@@ -70,6 +71,7 @@ Version History
 #define DEF_MAX_SENSOR_TEMP 57.0f
 #define DEF_ILLEGAL_TEMP    65.0f
 #define DEF_MAX_SETUP_TEMP  55.0f
+// #define AUTOSTART
 
 const char* APPLICATION = "TemperAtureRegulator";
 const char* DESCRIPTION = "regulates temperature and airflow for tempering of shell and mold parts";
@@ -768,6 +770,17 @@ void dts_printAddress(DeviceAddress aAddress)
   }
 }
 
+void auto_start() {
+  # ifdef AUTOSTART
+  logMsg(INFO, String("auto-starting temper process ..."));
+  ourTempCtrler.unlock();
+  ourTempCtrler.setTargetTemperature(42); // temperature in °C
+  ourTempCtrler.setTemperDuration( 12 * 60); // duration in minutes
+  ourTempCtrler.setTemperatureGradient(6);   // gradient in °C per hour
+  ourTempCtrler.start(true); 
+  ourTempCtrler.lock();
+  #endif
+}
 
 void setup() {
   setup_relay(); // do this immediately, to ensure switch off all relays by default
@@ -782,8 +795,9 @@ void setup() {
   setup_ota();
   setup_dts();
   setup_pwm();
-
   Serial.println("setup successfully finished");
+
+  auto_start();
 }
 
 // setup of the relay related stuff
