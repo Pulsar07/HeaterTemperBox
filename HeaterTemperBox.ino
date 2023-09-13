@@ -11,9 +11,10 @@
 // private settings
 #include "settings.h"
 
-const char* VERSION = "V0.12";
+const char* VERSION = "V0.13";
 /*
 Version History
+ V0.13  12.09.2023: RS : mqtt LWT enhancements and non blocking mqtt reconnects, more enhanced dts sensor error handling, fixed lock'ing handling
  V0.12  29.08.2023: RS : enhanced fix for problems at dts sensor read,  minor log fixes 
  V0.11  12.02.2023: RS : added <switch un/lock> command and ignoring recurring commands, enhanced logMsges
  V0.10  22.01.2023: RS : added <switch reset> command, to overcome a pending non-VALID state
@@ -141,8 +142,8 @@ class TemperatureController {
     int getCooldownTimer();
     float getCalculatedTemperature();
     uint8_t getTemperatureGradient();
-    void start();
-    void stop();
+    void start(boolean aUserCommand=false);
+    void stop(boolean aUserCommand=false);
     void lock();
     void unlock();
     boolean isActive();
@@ -205,8 +206,8 @@ void TemperatureController::unlock() {
   logMsg(INFO, String("unlock controller")); 
 }
 
-void TemperatureController::start() {
-  if (myLockState) {
+void TemperatureController::start(boolean aUserCommand) {
+  if (myLockState & aUserCommand) {
     // do nothing, but a log
     logMsg(WARNING, String("system is locked, unlock first"));
     return;
@@ -222,8 +223,8 @@ void TemperatureController::start() {
   logMsg(INFO, String("start temper process ")); 
 }
 
-void TemperatureController::stop() {
-  if (myLockState) {
+void TemperatureController::stop(boolean aUserCommand) {
+  if (myLockState & aUserCommand) {
     // do nothing, but a log
     logMsg(WARNING, String("system is locked, unlock first"));
     return;
@@ -547,7 +548,7 @@ void setup_wifi() {
 
 void check_wifi() {
   // checking for WIFI connection
-  uint8_t retry=25;
+  static uint8_t retry=25;
   if ((WiFi.status() != WL_CONNECTED)) {
     retry--;
     if (!retry) {
@@ -559,18 +560,46 @@ void check_wifi() {
     Serial.println("Reconnecting to WIFI network");
     WiFi.reconnect();
     delay(500);
+  } else {
+    retry=25;
   }
 }
  
+void mqtt_publishData(String aTopic, String aPayload, boolean aRetain=false) {
+  char mqttTopic[BUF_SIZE];
+  char mqttPayload[BUF_SIZE];
+  snprintf (mqttTopic, BUF_SIZE, aTopic.c_str(), MQTT_MYSELF);
+  snprintf (mqttPayload, BUF_SIZE, "%s", aPayload.c_str());
+  Serial.println("  " +String(mqttTopic) + "=" + mqttPayload);
+  ourMqttClient.publish(mqttTopic, mqttPayload, aRetain);
+}
+
 void mqtt_reconnect() {
-  while (!ourMqttClient.connected()) {
-    String uid = WiFi.macAddress();
-    uid.replace(":","");
-    String mqtt_id = String(APPLICATION) + "_" + uid;
-    log_printSecond();
-    Serial.println(mqtt_id + ": MQTT reconnecting...");
-    
-    mqtt_subscribe(mqtt_id.c_str());
+  if (!ourMqttClient.connected()) {
+    static unsigned long lastReconnectAttempt = 0;
+    static uint16_t connectionCnt = 0;
+    unsigned long now = millis();
+    if (now - lastReconnectAttempt > 5000) {
+      lastReconnectAttempt = now;
+      // Attempt to reconnect
+      String uid = WiFi.macAddress();
+      uid.replace(":","");
+      String mqtt_id = String(APPLICATION) + "_" + uid;
+      log_printSecond();
+      Serial.println(mqtt_id + ": MQTT reconnecting...");
+      if (ourMqttClient.connect(mqtt_id.c_str(), MQTT_USER, MQTT_PASSWD, MQTT_LWT_TOPIC, 0, 0, "offline", true)) {
+        lastReconnectAttempt = 0;
+        connectionCnt++;
+        mqtt_publishData(MQTT_LWT_TOPIC, "online", true);
+        mqtt_publishData("/tele/%s/wificonnects", String(connectionCnt));
+        mqtt_subscribe(mqtt_id.c_str());
+      } else {
+        log_printSecond();
+        Serial.print("  failed, rc=");
+        Serial.print(ourMqttClient.state());
+        Serial.println("  retrying in 5 seconds");
+      }
+    }
   }
 }
 
@@ -578,34 +607,26 @@ void mqtt_reconnect() {
 subscribe mqtt topics to receive commands and arguments
 */
 void mqtt_subscribe(const char* aMqttId) {
-  if (ourMqttClient.connect(aMqttId, MQTT_USER, MQTT_PASSWD, MQTT_LWT_TOPIC, 0, 0, "offline", true)) {
-    char mqttTopic[BUF_SIZE];
-    log_printSecond();
-    Serial.println("  topic subscription:");
+  char mqttTopic[BUF_SIZE];
+  log_printSecond();
+  Serial.println("  topic subscription:");
 
-    // // ... and resubscribe
-    snprintf (mqttTopic, BUF_SIZE, "cmnd/%s/switch", MQTT_MYSELF);
-    Serial.println("  subscribing for: " +String(mqttTopic));
-    ourMqttClient.subscribe(mqttTopic);
-    snprintf (mqttTopic, BUF_SIZE, "cmnd/%s/target_temp", MQTT_MYSELF);
-    Serial.println("  subscribing for: " +String(mqttTopic));
-    ourMqttClient.subscribe(mqttTopic);
-    snprintf (mqttTopic, BUF_SIZE, "cmnd/%s/heat_duration", MQTT_MYSELF);
-    Serial.println("  subscribing for: " +String(mqttTopic));
-    ourMqttClient.subscribe(mqttTopic);
-    snprintf (mqttTopic, BUF_SIZE, "cmnd/%s/temperature_gradient", MQTT_MYSELF);
-    Serial.println("  subscribing for: " +String(mqttTopic));
-    ourMqttClient.subscribe(mqttTopic);
-    snprintf (mqttTopic, BUF_SIZE, "cmnd/%s/log_level", MQTT_MYSELF);
-    Serial.println("  subscribing for: " +String(mqttTopic));
-    ourMqttClient.subscribe(mqttTopic);
-  } else {
-    log_printSecond();
-    Serial.print("  failed, rc=");
-    Serial.print(ourMqttClient.state());
-    Serial.println("  retrying in 5 seconds");
-    delay(5000);
-  }
+  // // ... and resubscribe
+  snprintf (mqttTopic, BUF_SIZE, "cmnd/%s/switch", MQTT_MYSELF);
+  Serial.println("  subscribing for: " +String(mqttTopic));
+  ourMqttClient.subscribe(mqttTopic);
+  snprintf (mqttTopic, BUF_SIZE, "cmnd/%s/target_temp", MQTT_MYSELF);
+  Serial.println("  subscribing for: " +String(mqttTopic));
+  ourMqttClient.subscribe(mqttTopic);
+  snprintf (mqttTopic, BUF_SIZE, "cmnd/%s/heat_duration", MQTT_MYSELF);
+  Serial.println("  subscribing for: " +String(mqttTopic));
+  ourMqttClient.subscribe(mqttTopic);
+  snprintf (mqttTopic, BUF_SIZE, "cmnd/%s/temperature_gradient", MQTT_MYSELF);
+  Serial.println("  subscribing for: " +String(mqttTopic));
+  ourMqttClient.subscribe(mqttTopic);
+  snprintf (mqttTopic, BUF_SIZE, "cmnd/%s/log_level", MQTT_MYSELF);
+  Serial.println("  subscribing for: " +String(mqttTopic));
+  ourMqttClient.subscribe(mqttTopic);
 }
 
 /**
@@ -631,10 +652,10 @@ void mqtt_callback(char* aTopic, byte* aPayload, unsigned int aLength) {
       logMsg(INFO, String("mqtt command received unlock: " + theTopic + "/" + thePayload));
       ourTempCtrler.unlock();
     } else if (thePayload.equals("on")) {
-      ourTempCtrler.start();
+      ourTempCtrler.start(true);
       Serial.println(String("switch on : " + theTopic));
     } else {
-      ourTempCtrler.stop();
+      ourTempCtrler.stop(true);
       Serial.println(String("switch off : " + theTopic));
     }
   } else
@@ -803,15 +824,6 @@ void setup_mqtt() {
   ourMqttClient.setCallback(mqtt_callback);
 }
 
-void mqtt_publishData(String aTopic, String aPayload, boolean aRetain=false) {
-  char mqttTopic[BUF_SIZE];
-  char mqttPayload[BUF_SIZE];
-  snprintf (mqttTopic, BUF_SIZE, aTopic.c_str(), MQTT_MYSELF);
-  snprintf (mqttPayload, BUF_SIZE, "%s", aPayload.c_str());
-  Serial.println("  " +String(mqttTopic) + "=" + mqttPayload);
-  ourMqttClient.publish(mqttTopic, mqttPayload, aRetain);
-}
-
 String getDurationString(int aDuration) {
   // aDuration is in minutes
   String duraDays = String(aDuration/(60*24));
@@ -853,7 +865,6 @@ void mqtt_sendData() {
     mqtt_publishData("/stat/%s/macaddress", WiFi.macAddress());
     mqtt_publishData("/stat/%s/cmddescription", CMDDESCRIPTION);
     mqtt_publishData("/stat/%s/build", BUILD_DATE);
-    mqtt_publishData(MQTT_LWT_TOPIC, "online", true);
   }
 
 
@@ -988,10 +999,15 @@ float getTemp(TemperatureSensor* aSensor) {
     aSensor->temperature_last = newTemp;
   }
 
-  if (newTemp == DEVICE_DISCONNECTED_C) { // = -127.0
+  if (newTemp == DEVICE_DISCONNECTED_C || abs(newTemp - aSensor->temperature_last) >= 3.0f ) { // = -127.0
     aSensor->faultnum++;
   } else {
     aSensor->faultnum = 0;
+  }
+
+  if (abs(newTemp - aSensor->temperature_last) >= 3.0f) {
+    // in case of inplausible value hops, set system to safe state
+    logMsg(ERROR, "temperature sensor value fault");
   }
 
   if (aSensor->faultnum > 10) {
@@ -1005,11 +1021,6 @@ float getTemp(TemperatureSensor* aSensor) {
     logMsg(WARNING, "temperature sensor " + aSensor->name + " with temporary problem: " + aSensor->faultnum);
   }
 
-  if (abs(newTemp - aSensor->temperature_last) >= 3.0f) {
-    // in case of inplausible value hops, set system to safe state
-    logMsg(ERROR, "temperature sensor value vaults");
-    setState(ERROR_TEMP_SENSOR, String(newTemp)+"/"+String(aSensor->temperature_last));
-  }
   aSensor->temperature_last = newTemp;
   return newTemp;
 }
@@ -1078,7 +1089,7 @@ void  controlTemperature() {
     return;
   }
   
-  static int heatPower = 30;
+  static int heatPower = 70;
   static int timeLow=0;
   static int timeHigh=0;
   static int powerBalance=0;
@@ -1142,6 +1153,9 @@ void switchRelay(RelayChannel* aPtrRelayChannel, SwitchState aState) {
 void loop() {
   static unsigned long last = 0;
 
+  if (!ourMqttClient.connected()) {
+    mqtt_reconnect();
+  }
   ourMqttClient.loop();
   ArduinoOTA.handle();
 
